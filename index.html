@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Shadow3D PLY Viewer</title>
+  </head>
+
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <h2>PLY 目录</h2>
+        <div id="current-name">当前：未加载</div>
+        <div id="item-list"></div>
+      </aside>
+
+      <main id="content">
+        <div id="main-layout">
+          <section id="viewer-column">
+            <div class="panel half-panel">
+              <div class="panel-title">GT 点云</div>
+              <div id="gt-viewer" class="viewer"></div>
+            </div>
+
+            <div class="panel half-panel">
+              <div class="panel-title">Pred 点云</div>
+              <div id="pred-viewer" class="viewer"></div>
+            </div>
+          </section>
+
+          <section id="shadow-column" class="panel">
+            <div class="panel-title">输入阴影序列</div>
+            <div id="shadow-grid"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

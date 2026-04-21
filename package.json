@@ -1,0 +1,19 @@
+{
+  "name": "shadow3d-ply-viewer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "client": "vite",
+    "server": "node server.cjs",
+    "dev": "concurrently -k -n API,VITE \"npm run server\" \"npm run client\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "vite": "^8.0.9"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "three": "^0.184.0"
+  }
+}
