@@ -216,7 +216,7 @@ function renderShadowFrames(item) {
     shadowGridEl.innerHTML = `
       <div class="empty">
         没有找到阴影图。<br />
-        请检查：data/train_runs/dataset/类别ID/模型ID/frame_000/rgb_with_shadow.png
+        请检查：data/test_runs/dataset/类别ID/模型ID/frame_000/rgb_with_shadow.png
       </div>
     `;
     return;

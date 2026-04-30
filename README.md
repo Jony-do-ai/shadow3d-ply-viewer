@@ -20,6 +20,3 @@ Command: run
 Scripts: dev
 Node interpreter: 你配置好的 node.exe
 Package manager: nodejs安装目录\npm.cmd
-4.安装 concurrently
-在 D:\shadow3d-ply-viewer 下执行：
-npm install --save-dev concurrently

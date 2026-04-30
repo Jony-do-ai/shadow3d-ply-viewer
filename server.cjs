@@ -22,7 +22,7 @@ const PORT = 3001;
 const PLY_ROOT = process.env.PLY_ROOT || "D:/shadow3d-recon/outputs/infer";
 
 // 原始数据集目录：用于找阴影图
-const DATASET_ROOT = process.env.DATASET_ROOT || "D:/shadow3d-recon/data/train_runs/dataset";
+const DATASET_ROOT = process.env.DATASET_ROOT || "D:/shadow3d-recon/data/test_runs/dataset";
 
 console.log("[INFO] PLY_ROOT =", PLY_ROOT);
 console.log("[INFO] DATASET_ROOT =", DATASET_ROOT);
