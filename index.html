@@ -2,37 +2,88 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Shadow3D PLY Viewer</title>
   </head>
 
   <body>
     <div id="app">
-      <aside id="sidebar">
-        <h2>PLY 目录</h2>
-        <div id="current-name">当前：未加载</div>
-        <div id="item-list"></div>
-      </aside>
+      <header id="top-nav">
+        <div class="brand">Shadow3D PLY Viewer</div>
 
-      <main id="content">
-        <div id="main-layout">
-          <section id="viewer-column">
-            <div class="panel half-panel">
-              <div class="panel-title">GT 点云</div>
-              <div id="gt-viewer" class="viewer"></div>
-            </div>
+        <div id="top-controls">
+          <div class="experiment-control" aria-label="消融实验选择">
+            <label for="experiment-select">消融实验</label>
+            <select id="experiment-select">
+              <option value="">正在读取实验...</option>
+            </select>
+            <span id="experiment-hint">先选择实验，再切换训练集、测试集或 CSV 视图。</span>
+          </div>
 
-            <div class="panel half-panel">
-              <div class="panel-title">Pred 点云</div>
-              <div id="pred-viewer" class="viewer"></div>
-            </div>
-          </section>
-
-          <section id="shadow-column" class="panel">
-            <div class="panel-title">输入阴影序列</div>
-            <div id="shadow-grid"></div>
-          </section>
+          <nav class="tabs" aria-label="数据页切换">
+            <button id="tab-train" class="tab-button active" type="button" data-mode="train">训练集</button>
+            <button id="tab-test" class="tab-button" type="button" data-mode="test">测试集</button>
+            <button id="tab-csv" class="tab-button" type="button" data-mode="csv">CSV</button>
+          </nav>
         </div>
-      </main>
+      </header>
+
+      <div id="body-layout">
+        <aside id="sidebar">
+          <h2 id="sidebar-title">训练集目录</h2>
+          <div id="current-name">当前：正在加载</div>
+          <div id="item-list"></div>
+        </aside>
+
+        <main id="content">
+          <section id="train-page" class="page active" aria-label="训练集信息">
+            <div id="train-layout">
+              <div id="train-viewer-grid"></div>
+            </div>
+          </section>
+
+          <section id="test-page" class="page" aria-label="测试集信息">
+            <div id="main-layout">
+              <section id="viewer-column">
+                <div class="panel half-panel">
+                  <div class="panel-title">GT 点云</div>
+                  <div id="gt-viewer" class="viewer"></div>
+                </div>
+
+                <div class="panel half-panel">
+                  <div class="panel-title">Pred 点云</div>
+                  <div id="pred-viewer" class="viewer"></div>
+                </div>
+              </section>
+
+              <section id="shadow-column" class="panel">
+                <div class="panel-title">输入阴影序列</div>
+                <div id="shadow-grid"></div>
+              </section>
+            </div>
+          </section>
+
+          <section id="csv-page" class="page" aria-label="CSV 图表">
+            <div id="csv-layout">
+              <section class="panel csv-panel">
+                <div class="panel-title csv-panel-title-row">
+                  <span id="csv-chart-title">CSV 图表</span>
+                  <label class="csv-axis-control" for="csv-group-select">
+                    <span>参数组</span>
+                    <select id="csv-group-select"></select>
+                  </label>
+                </div>
+                <div id="csv-plot" class="csv-plot"></div>
+              </section>
+
+              <section class="panel csv-legend-panel">
+                <div class="panel-title">图例</div>
+                <div id="csv-legend" class="csv-legend"></div>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

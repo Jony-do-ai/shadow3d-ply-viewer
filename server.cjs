@@ -16,16 +16,95 @@ app.use((req, res, next) => {
   next();
 });
 
-const PORT = 3001;
+const APP_CONFIG_PATH = process.env.APP_CONFIG || path.join(__dirname, "config", "app_config.json");
 
-// 推理结果目录：里面放 gt.ply / pred.ply
-const PLY_ROOT = process.env.PLY_ROOT || "D:/shadow3d-recon/outputs/infer";
+function loadJson(filePath, fallbackValue) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      console.warn("[WARN] config not found:", filePath);
+      return fallbackValue;
+    }
 
-// 原始数据集目录：用于找阴影图
-const DATASET_ROOT = process.env.DATASET_ROOT || "D:/shadow3d-recon/data/test_runs/dataset";
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch (err) {
+    console.warn("[WARN] failed to load json config:", filePath, err.message || err);
+    return fallbackValue;
+  }
+}
 
+const APP_CONFIG = loadJson(APP_CONFIG_PATH, {});
+
+function resolveConfiguredPath(value, fallbackRelativePath) {
+  const raw = value || fallbackRelativePath;
+
+  if (!raw) {
+    return "";
+  }
+
+  if (path.isAbsolute(raw)) {
+    return path.normalize(raw);
+  }
+
+  return path.resolve(__dirname, raw);
+}
+
+const FILE_CONFIG = {
+  trainPointCloudsDirName: "point_clouds",
+  testPredNames: ["pred.ply", "pre.ply"],
+  testGtName: "gt.ply",
+  trainPredPattern: "^epoch_\\d+_pred\\.ply$",
+  trainGtName: "gt.ply",
+  shadowImageName: "rgb_with_shadow.png",
+  shadowFrameCount: 10,
+  ...(APP_CONFIG.files || {}),
+};
+
+const PORT = Number(process.env.PORT || APP_CONFIG.server?.port || 3001);
+const PLY_ROOT = process.env.PLY_ROOT || resolveConfiguredPath(APP_CONFIG.paths?.inferRoot, "");
+const DATASET_ROOT = process.env.DATASET_ROOT || resolveConfiguredPath(APP_CONFIG.paths?.testDatasetRoot, "");
+const TRAIN_RUNS_ROOT = process.env.TRAIN_RUNS_ROOT || resolveConfiguredPath(APP_CONFIG.paths?.trainRunsRoot, "");
+const CATEGORY_CONFIG =
+  process.env.CATEGORY_CONFIG || resolveConfiguredPath(APP_CONFIG.paths?.categoryConfig, "config/shape_categories.json");
+
+const TEST_PRED_NAMES = (Array.isArray(FILE_CONFIG.testPredNames) ? FILE_CONFIG.testPredNames : ["pred.ply"])
+  .map((name) => String(name).toLowerCase());
+const TEST_GT_NAME = String(FILE_CONFIG.testGtName || "gt.ply");
+const TRAIN_GT_NAME = String(FILE_CONFIG.trainGtName || "gt.ply");
+const TRAIN_PRED_RE = new RegExp(FILE_CONFIG.trainPredPattern || "^epoch_\\d+_pred\\.ply$", "i");
+const SHADOW_IMAGE_NAME = String(FILE_CONFIG.shadowImageName || "rgb_with_shadow.png");
+const SHADOW_FRAME_COUNT = Number(FILE_CONFIG.shadowFrameCount || 10);
+const CSV_DATA_ROOT = path.join(__dirname, "public", "data", "train");
+
+console.log("[INFO] APP_CONFIG =", APP_CONFIG_PATH);
 console.log("[INFO] PLY_ROOT =", PLY_ROOT);
 console.log("[INFO] DATASET_ROOT =", DATASET_ROOT);
+console.log("[INFO] TRAIN_RUNS_ROOT =", TRAIN_RUNS_ROOT);
+console.log("[INFO] CATEGORY_CONFIG =", CATEGORY_CONFIG);
+
+const CATEGORY_MAP = loadJson(CATEGORY_CONFIG, {});
+
+function getConfiguredExperiments() {
+  const experiments = APP_CONFIG.experiments || [];
+
+  return experiments
+    .map((exp) => {
+      if (typeof exp === "string") {
+        return { name: exp, label: exp };
+      }
+
+      return {
+        name: String(exp?.name || "").trim(),
+        label: String(exp?.label || exp?.name || "").trim(),
+      };
+    })
+    .filter((exp) => exp.name);
+}
+
+const EXPERIMENTS = getConfiguredExperiments();
+
+function getExperimentMeta(name) {
+  return EXPERIMENTS.find((exp) => exp.name === name) || null;
+}
 
 function isSubPath(parent, child) {
   const relative = path.relative(parent, child);
@@ -43,62 +122,80 @@ function safeResolve(root, relativePath) {
   return absPath;
 }
 
-function findPlyItems(rootDir) {
-  const results = [];
-
-  function walk(currentDir) {
-    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
-
-    const fileNames = entries
-      .filter((e) => e.isFile())
-      .map((e) => e.name.toLowerCase());
-
-    const hasGt = fileNames.includes("gt.ply");
-    const hasPred = fileNames.includes("pred.ply") || fileNames.includes("pre.ply");
-
-    if (hasGt || hasPred) {
-      const relDir = path.relative(rootDir, currentDir).replace(/\\/g, "/");
-      const folderName = path.basename(currentDir);
-
-      results.push({
-        name: folderName,
-        relDir,
-        hasGt,
-        hasPred,
-      });
-    }
-
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        walk(path.join(currentDir, entry.name));
-      }
-    }
-  }
-
-  if (!fs.existsSync(rootDir)) {
+function listDirSafe(dir) {
+  if (!fs.existsSync(dir)) {
     return [];
   }
 
-  walk(rootDir);
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    console.warn("[WARN] cannot read dir:", dir, err.message || err);
+    return [];
+  }
+}
 
-  return results.sort((a, b) => a.name.localeCompare(b.name));
+function normalizeRelPath(absRoot, absPath) {
+  return path.relative(absRoot, absPath).replace(/\\/g, "/");
 }
 
 function parseSampleName(sampleName) {
-  const firstUnderscore = sampleName.indexOf("_");
+  // 典型格式：02801938_133d74f10a0401317773da01b1ba21ef
+  const match = /^([0-9]{8})[_-](.+)$/.exec(sampleName);
 
-  if (firstUnderscore === -1) {
+  if (!match) {
     return null;
   }
 
-  const categoryId = sampleName.slice(0, firstUnderscore);
-  const modelId = sampleName.slice(firstUnderscore + 1);
+  const categoryId = match[1];
+  const modelId = match[2];
 
   if (!categoryId || !modelId) {
     return null;
   }
 
   return { categoryId, modelId };
+}
+
+function getCategoryMeta(categoryId) {
+  const config = CATEGORY_MAP[categoryId];
+
+  if (!config) {
+    return {
+      categoryId: categoryId || "unknown",
+      categoryNameEn: "Unknown",
+      categoryNameZh: categoryId ? `未知类别-${categoryId}` : "未知类别",
+      categoryCount: null,
+      categoryLabel: categoryId ? `未知类别（${categoryId}）` : "未知类别",
+    };
+  }
+
+  return {
+    categoryId,
+    categoryNameEn: config.en || "Unknown",
+    categoryNameZh: config.zh || config.en || categoryId,
+    categoryCount: Number.isFinite(config.count) ? config.count : null,
+    categoryLabel: `${config.zh || config.en || categoryId}（${categoryId}）`,
+  };
+}
+
+function enrichSampleName(sampleName) {
+  const parsed = parseSampleName(sampleName);
+
+  if (!parsed) {
+    return {
+      sampleName,
+      categoryId: "unknown",
+      modelId: sampleName,
+      ...getCategoryMeta(null),
+    };
+  }
+
+  return {
+    sampleName,
+    ...parsed,
+    ...getCategoryMeta(parsed.categoryId),
+  };
 }
 
 function getShadowFrames(sampleName) {
@@ -109,7 +206,6 @@ function getShadowFrames(sampleName) {
   }
 
   const { categoryId, modelId } = parsed;
-
   const sampleDir = path.join(DATASET_ROOT, categoryId, modelId);
 
   if (!fs.existsSync(sampleDir)) {
@@ -118,9 +214,9 @@ function getShadowFrames(sampleName) {
 
   const frames = [];
 
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < SHADOW_FRAME_COUNT; i++) {
     const frameName = `frame_${String(i).padStart(3, "0")}`;
-    const imagePath = path.join(sampleDir, frameName, "rgb_with_shadow.png");
+    const imagePath = path.join(sampleDir, frameName, SHADOW_IMAGE_NAME);
 
     if (fs.existsSync(imagePath)) {
       frames.push({
@@ -134,38 +230,412 @@ function getShadowFrames(sampleName) {
   return frames;
 }
 
+function getLowerFileNameMap(entries) {
+  const map = new Map();
+
+  for (const entry of entries) {
+    if (entry.isFile()) {
+      map.set(entry.name.toLowerCase(), entry.name);
+    }
+  }
+
+  return map;
+}
+
+function findTestPredFile(fileMap) {
+  for (const predName of TEST_PRED_NAMES) {
+    if (fileMap.has(predName)) {
+      return fileMap.get(predName);
+    }
+  }
+
+  return null;
+}
+
+function findTestSamplesForExperiment(experiment) {
+  const results = [];
+  const experimentRoot = path.join(PLY_ROOT, experiment.name);
+
+  function walk(currentDir) {
+    const entries = listDirSafe(currentDir);
+    const fileMap = getLowerFileNameMap(entries);
+    const gtFile = fileMap.get(TEST_GT_NAME.toLowerCase()) || null;
+    const predFile = findTestPredFile(fileMap);
+
+    if (gtFile || predFile) {
+      const relDir = normalizeRelPath(PLY_ROOT, currentDir);
+      const sampleName = path.basename(currentDir);
+      const sampleInfo = enrichSampleName(sampleName);
+
+      results.push({
+        mode: "test",
+        nodeType: "sample",
+        id: `test:${relDir}`,
+        label: sampleInfo.modelId,
+        relDir,
+        experimentName: experiment.name,
+        experimentLabel: experiment.label,
+        hasGt: Boolean(gtFile),
+        hasPred: Boolean(predFile),
+        gtUrl: gtFile
+          ? `/api/ply?mode=test&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(gtFile)}`
+          : null,
+        predUrl: predFile
+          ? `/api/ply?mode=test&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(predFile)}`
+          : null,
+        shadowFrames: getShadowFrames(sampleName),
+        ...sampleInfo,
+      });
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        walk(path.join(currentDir, entry.name));
+      }
+    }
+  }
+
+  if (!fs.existsSync(experimentRoot)) {
+    return [];
+  }
+
+  walk(experimentRoot);
+  return results.sort(compareSamples);
+}
+
+function getEpochNumber(fileName) {
+  const match = /^epoch_(\d+)_pred\.ply$/i.exec(fileName);
+  return match ? Number(match[1]) : null;
+}
+
+function findTrainSamplesForExperiment(experiment) {
+  const results = [];
+  const pointCloudsDir = path.join(
+    TRAIN_RUNS_ROOT,
+    experiment.name,
+    FILE_CONFIG.trainPointCloudsDirName
+  );
+
+  for (const entry of listDirSafe(pointCloudsDir)) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const sampleDir = path.join(pointCloudsDir, entry.name);
+    const relDir = normalizeRelPath(TRAIN_RUNS_ROOT, sampleDir);
+    const fileNames = listDirSafe(sampleDir)
+      .filter((e) => e.isFile())
+      .map((e) => e.name);
+
+    const predFiles = fileNames
+      .filter((name) => TRAIN_PRED_RE.test(name))
+      .sort((a, b) => getEpochNumber(a) - getEpochNumber(b));
+
+    const gtFile = fileNames.find((name) => name.toLowerCase() === TRAIN_GT_NAME.toLowerCase()) || null;
+
+    if (predFiles.length === 0 && !gtFile) {
+      continue;
+    }
+
+    const sampleInfo = enrichSampleName(entry.name);
+    const plyFiles = [
+      ...predFiles.map((file) => ({
+        kind: "pred",
+        file,
+        label: file,
+        epoch: getEpochNumber(file),
+        url: `/api/ply?mode=train&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(file)}`,
+      })),
+      ...(gtFile
+        ? [
+            {
+              kind: "gt",
+              file: gtFile,
+              label: gtFile,
+              epoch: null,
+              url: `/api/ply?mode=train&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(gtFile)}`,
+            },
+          ]
+        : []),
+    ];
+
+    results.push({
+      mode: "train",
+      nodeType: "sample",
+      id: `train:${relDir}`,
+      label: sampleInfo.modelId,
+      relDir,
+      experimentName: experiment.name,
+      experimentLabel: experiment.label,
+      plyFiles,
+      ...sampleInfo,
+    });
+  }
+
+  return results.sort(compareSamples);
+}
+
+function compareSamples(a, b) {
+  return (
+    String(a.categoryNameZh).localeCompare(String(b.categoryNameZh), "zh-CN") ||
+    String(a.modelId).localeCompare(String(b.modelId), "zh-CN")
+  );
+}
+
+function makeGroupNode(nodeType, id, label, extra = {}) {
+  return {
+    nodeType,
+    id,
+    label,
+    children: [],
+    ...extra,
+  };
+}
+
+function buildCategoryTree(samples) {
+  const catMap = new Map();
+
+  for (const sample of samples) {
+    const catKey = sample.categoryId || "unknown";
+
+    if (!catMap.has(catKey)) {
+      catMap.set(
+        catKey,
+        makeGroupNode("category", `cat:${catKey}`, sample.categoryLabel, {
+          categoryId: sample.categoryId,
+          categoryNameEn: sample.categoryNameEn,
+          categoryNameZh: sample.categoryNameZh,
+          categoryCount: sample.categoryCount,
+        })
+      );
+    }
+
+    const catNode = catMap.get(catKey);
+    catNode.children.push({
+      nodeType: "sample",
+      id: sample.id,
+      label: sample.modelId,
+      item: sample,
+    });
+  }
+
+  const tree = Array.from(catMap.values());
+
+  for (const catNode of tree) {
+    catNode.children.sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
+    catNode.count = catNode.children.length;
+  }
+
+  tree.sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
+
+  return tree;
+}
+
+function getSamplesByMode(mode, experiment) {
+  return mode === "train"
+    ? findTrainSamplesForExperiment(experiment)
+    : findTestSamplesForExperiment(experiment);
+}
+
+function getExperimentSummary() {
+  return EXPERIMENTS.map((experiment) => {
+    const trainSamples = findTrainSamplesForExperiment(experiment);
+    const testSamples = findTestSamplesForExperiment(experiment);
+
+    return {
+      name: experiment.name,
+      label: experiment.label || experiment.name,
+      trainCount: trainSamples.length,
+      testCount: testSamples.length,
+    };
+  });
+}
+
+function getDataByMode(mode, experimentName) {
+  const experiment = getExperimentMeta(experimentName);
+
+  if (!experiment) {
+    return {
+      mode,
+      experimentName,
+      experimentLabel: experimentName,
+      root: mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT,
+      samples: [],
+      tree: [],
+    };
+  }
+
+  const samples = getSamplesByMode(mode, experiment);
+
+  return {
+    mode,
+    experimentName: experiment.name,
+    experimentLabel: experiment.label || experiment.name,
+    root: mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT,
+    samples,
+    tree: buildCategoryTree(samples),
+  };
+}
+
+function getPlyRootByMode(mode) {
+  return mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT;
+}
+
+function isValidPlyFile(mode, file) {
+  if (!file || path.basename(file) !== file) {
+    return false;
+  }
+
+  const lower = file.toLowerCase();
+
+  if (mode === "train") {
+    return lower === TRAIN_GT_NAME.toLowerCase() || TRAIN_PRED_RE.test(file);
+  }
+
+  return lower === TEST_GT_NAME.toLowerCase() || TEST_PRED_NAMES.includes(lower);
+}
+
+function parseCsvValue(value) {
+  const trimmed = String(value ?? "").trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const num = Number(trimmed);
+  return Number.isFinite(num) ? num : trimmed;
+}
+
+function splitCsvLine(line) {
+  return String(line)
+    .split(",")
+    .map((part) => part.trim());
+}
+
+function getCsvFiles() {
+  return listDirSafe(CSV_DATA_ROOT)
+    .filter((entry) => entry.isFile() && /\.csv$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+
+function parseCsvFile(fileName) {
+  const filePath = safeResolve(CSV_DATA_ROOT, fileName);
+
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  const text = fs.readFileSync(filePath, "utf-8").replace(/^\uFEFF/, "").trim();
+
+  if (!text) {
+    return {
+      name: fileName,
+      rowCount: 0,
+      numericColumns: [],
+      rows: [],
+    };
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return {
+      name: fileName,
+      rowCount: 0,
+      numericColumns: [],
+      rows: [],
+    };
+  }
+
+  const headers = splitCsvLine(lines[0]);
+  const rows = [];
+  const numericFlags = new Map(headers.map((header) => [header, true]));
+
+  for (let lineIndex = 1; lineIndex < lines.length; lineIndex++) {
+    const values = splitCsvLine(lines[lineIndex]);
+    const row = {};
+
+    headers.forEach((header, index) => {
+      const parsed = parseCsvValue(values[index]);
+      row[header] = parsed;
+
+      if (parsed !== null && !Number.isFinite(parsed)) {
+        numericFlags.set(header, false);
+      }
+    });
+
+    rows.push(row);
+  }
+
+  const numericColumns = headers.filter((header) => numericFlags.get(header));
+
+  return {
+    name: fileName,
+    rowCount: rows.length,
+    numericColumns,
+    rows,
+  };
+}
+
+function getCsvData() {
+  const files = getCsvFiles()
+    .map((fileName) => parseCsvFile(fileName))
+    .filter(Boolean);
+
+  const columns = Array.from(
+    new Set(files.flatMap((file) => file.numericColumns || []))
+  ).sort((a, b) => a.localeCompare(b, "en"));
+
+  return {
+    root: CSV_DATA_ROOT,
+    fileCount: files.length,
+    columns,
+    files,
+  };
+}
+
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
+    appConfig: APP_CONFIG_PATH,
     plyRoot: PLY_ROOT,
     datasetRoot: DATASET_ROOT,
+    trainRunsRoot: TRAIN_RUNS_ROOT,
+    categoryConfig: CATEGORY_CONFIG,
+    experiments: EXPERIMENTS,
+    fileConfig: FILE_CONFIG,
   });
+});
+
+app.get("/api/experiments", (req, res) => {
+  try {
+    res.json({
+      experiments: getExperimentSummary(),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
 });
 
 app.get("/api/items", (req, res) => {
   try {
-    const items = findPlyItems(PLY_ROOT).map((item) => {
-      const gtUrl = item.hasGt
-        ? `/api/ply?relDir=${encodeURIComponent(item.relDir)}&file=gt.ply`
-        : null;
+    const mode = req.query.mode === "test" ? "test" : "train";
+    const experiment = typeof req.query.experiment === "string" ? req.query.experiment : "";
+    res.json(getDataByMode(mode, experiment));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
 
-      const predFile = fs.existsSync(path.join(PLY_ROOT, item.relDir, "pred.ply"))
-        ? "pred.ply"
-        : "pre.ply";
-
-      const predUrl = item.hasPred
-        ? `/api/ply?relDir=${encodeURIComponent(item.relDir)}&file=${encodeURIComponent(predFile)}`
-        : null;
-
-      return {
-        ...item,
-        gtUrl,
-        predUrl,
-        shadowFrames: getShadowFrames(item.name),
-      };
-    });
-
-    res.json({ items });
+app.get("/api/csv-data", (req, res) => {
+  try {
+    res.json(getCsvData());
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: String(err.message || err) });
@@ -174,6 +644,7 @@ app.get("/api/items", (req, res) => {
 
 app.get("/api/ply", (req, res) => {
   try {
+    const mode = req.query.mode === "train" ? "train" : "test";
     const relDir = req.query.relDir;
     const file = req.query.file;
 
@@ -181,11 +652,12 @@ app.get("/api/ply", (req, res) => {
       return res.status(400).json({ error: "Missing relDir or file" });
     }
 
-    if (file !== "gt.ply" && file !== "pred.ply" && file !== "pre.ply") {
+    if (!isValidPlyFile(mode, file)) {
       return res.status(400).json({ error: "Invalid ply file" });
     }
 
-    const filePath = safeResolve(PLY_ROOT, path.join(relDir, file));
+    const root = getPlyRootByMode(mode);
+    const filePath = safeResolve(root, path.join(relDir, file));
 
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: "PLY not found", filePath });
@@ -222,7 +694,7 @@ app.get("/api/shadow", (req, res) => {
       parsed.categoryId,
       parsed.modelId,
       frame,
-      "rgb_with_shadow.png"
+      SHADOW_IMAGE_NAME
     );
 
     if (!fs.existsSync(imagePath)) {
@@ -236,6 +708,14 @@ app.get("/api/shadow", (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[INFO] API server running at http://localhost:${PORT}`);
+});
+
+server.on("close", () => {
+  console.log("[INFO] API server closed");
+});
+
+server.on("error", (err) => {
+  console.error("[ERROR] API server error:", err);
 });

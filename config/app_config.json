@@ -1,0 +1,66 @@
+{
+  "server": {
+    "port": 3001
+  },
+  "paths": {
+    "inferRoot": "D:/shadow3d-recon/outputs/infer",
+    "testDatasetRoot": "D:/shadow3d-recon/data/test_runs/dataset",
+    "trainRunsRoot": "D:/shadow3d-recon/data/train_runs",
+    "categoryConfig": "config/shape_categories.json"
+  },
+  "experiments": [
+    {
+      "name": "exp_no_light",
+      "label": "去除光线输入"
+    },
+    {
+      "name": "shadow_point_baseline",
+      "label": "基础点云模型"
+    },
+    {
+      "name": "pct_refiner",
+      "label": "pct_refiner"
+    },
+    {
+      "name": "pct-v2",
+      "label": "pct-v2"
+    },
+    {
+      "name": "apml-pct",
+      "label": "apml-pct"
+    },
+    {
+      "name": "apml-nopct",
+      "label": "apml-nopct"
+    },
+    {
+      "name": "apml-shadow",
+      "label": "apml-shadow"
+    },
+    {
+      "name": "apml-shadow-2part",
+      "label": "apml-shadow-2part"
+    },
+    {
+      "name": "cnn-transformer-apml",
+      "label": "cnn-transformer-apml"
+    },
+    {
+      "name": "cnn-apml-proj-stage2",
+      "label": "cnn-apml-proj-stage2"
+    },
+    {
+      "name": "drwr",
+      "label": "drwr"
+    }
+  ],
+  "files": {
+    "trainPointCloudsDirName": "point_clouds",
+    "testPredNames": ["pred.ply", "*.ply"],
+    "testGtName": "gt.ply",
+    "trainPredPattern": ["^epoch_\\d+_pred\\.ply$"],
+    "trainGtName": "gt.ply",
+    "shadowImageName": "rgb_with_shadow.png",
+    "shadowFrameCount": 10
+  }
+}

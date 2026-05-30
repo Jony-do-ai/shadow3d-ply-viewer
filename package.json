@@ -6,7 +6,7 @@
   "scripts": {
     "client": "vite",
     "server": "node server.cjs",
-    "dev": "concurrently -k -n API,VITE \"npm run server\" \"npm run client\""
+    "dev": "node dev.cjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
