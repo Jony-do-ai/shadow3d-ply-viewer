@@ -1096,14 +1096,18 @@ app.get("/api/shadow", (req, res) => {
   }
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`[INFO] API server running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  const server = app.listen(PORT, () => {
+    console.log(`[INFO] API server running at http://localhost:${PORT}`);
+  });
 
-server.on("close", () => {
-  console.log("[INFO] API server closed");
-});
+  server.on("close", () => {
+    console.log("[INFO] API server closed");
+  });
 
-server.on("error", (err) => {
-  console.error("[ERROR] API server error:", err);
-});
+  server.on("error", (err) => {
+    console.error("[ERROR] API server error:", err);
+  });
+}
+
+module.exports = app;

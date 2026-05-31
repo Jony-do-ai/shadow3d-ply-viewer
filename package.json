@@ -6,7 +6,8 @@
   "scripts": {
     "client": "vite",
     "server": "node server.cjs",
-    "dev": "node dev.cjs"
+    "dev": "node dev.cjs",
+    "build": "vite build"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
