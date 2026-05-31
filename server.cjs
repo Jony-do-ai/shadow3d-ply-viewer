@@ -193,10 +193,8 @@ console.log("[INFO] REMOTE_MANIFEST_FILE =", REMOTE_MANIFEST_FILE);
 
 const CATEGORY_MAP = loadJson(CATEGORY_CONFIG, {});
 
-function getConfiguredExperiments() {
-  const experiments = APP_CONFIG.experiments || [];
-
-  return experiments
+function parseConfiguredExperiments(experiments) {
+  return (Array.isArray(experiments) ? experiments : [])
     .map((exp) => {
       if (typeof exp === "string") {
         return { name: exp, label: exp };
@@ -210,10 +208,31 @@ function getConfiguredExperiments() {
     .filter((exp) => exp.name);
 }
 
-const EXPERIMENTS = getConfiguredExperiments();
+function getConfiguredExperiments(mode) {
+  if (mode === "train" && Array.isArray(APP_CONFIG.trainExperiments)) {
+    return parseConfiguredExperiments(APP_CONFIG.trainExperiments);
+  }
 
-function getExperimentMeta(name) {
-  return EXPERIMENTS.find((exp) => exp.name === name) || null;
+  if (mode === "test" && Array.isArray(APP_CONFIG.testExperiments)) {
+    return parseConfiguredExperiments(APP_CONFIG.testExperiments);
+  }
+
+  return parseConfiguredExperiments(APP_CONFIG.experiments || []);
+}
+
+const TRAIN_EXPERIMENTS = getConfiguredExperiments("train");
+const TEST_EXPERIMENTS = getConfiguredExperiments("test");
+const EXPERIMENTS = Array.from(
+  new Map([...TRAIN_EXPERIMENTS, ...TEST_EXPERIMENTS, ...getConfiguredExperiments()].map((exp) => [exp.name, exp])).values()
+);
+
+function getExperimentsByMode(mode) {
+  return mode === "test" ? TEST_EXPERIMENTS : TRAIN_EXPERIMENTS;
+}
+
+function getExperimentMeta(name, mode) {
+  const modeExperiments = mode ? getExperimentsByMode(mode) : EXPERIMENTS;
+  return modeExperiments.find((exp) => exp.name === name) || null;
 }
 
 function isSubPath(parent, child) {
@@ -610,6 +629,7 @@ function getRemoteTestSampleEntries(manifest, experiment) {
     expManifest?.testSamples,
     expManifest?.test,
     manifest?.testSamples?.[experiment.name],
+    manifest?.test_runs?.[experiment.name],
     manifest?.infer?.[experiment.name],
   ];
 
@@ -618,6 +638,14 @@ function getRemoteTestSampleEntries(manifest, experiment) {
 
     if (samples.length > 0) {
       return samples;
+    }
+
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      return Object.entries(candidate).map(([sampleName, files]) => ({
+        sampleName,
+        modelId: sampleName,
+        files,
+      }));
     }
   }
 
@@ -636,8 +664,17 @@ function findRemoteTestSamplesForExperiment(manifest, experiment) {
 
     const relDir = sample.relDir || joinRemoteUrl(experiment.name, sampleName);
     const sampleInfo = enrichSampleName(sampleName);
-    const gtFile = sample.gtFile || sample.gt_file || TEST_GT_NAME;
-    const predFile = sample.predFile || sample.pred_file || findTestPredFile(new Map([[TEST_PRED_NAMES[0], TEST_PRED_NAMES[0]]]));
+    const fileNames = getRemoteFileNames(sample);
+    const gtFile =
+      sample.gtFile ||
+      sample.gt_file ||
+      fileNames.find((name) => name.toLowerCase() === TEST_GT_NAME.toLowerCase()) ||
+      null;
+    const predFile =
+      sample.predFile ||
+      sample.pred_file ||
+      findTestPredFile(new Map(fileNames.map((name) => [name.toLowerCase(), name]))) ||
+      null;
     const makeUrl = (file) =>
       `/api/ply?mode=test&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(file)}`;
 
@@ -738,13 +775,17 @@ async function getSamplesByModeAsync(mode, experiment) {
 async function getExperimentSummary() {
   const manifest = REMOTE_ENABLED ? await loadRemoteManifest() : null;
 
-  return EXPERIMENTS.map((experiment) => {
-    const trainSamples = REMOTE_ENABLED
-      ? findRemoteTrainSamplesForExperiment(manifest, experiment)
-      : findTrainSamplesForExperiment(experiment);
-    const testSamples = REMOTE_ENABLED
-      ? findRemoteTestSamplesForExperiment(manifest, experiment)
-      : findTestSamplesForExperiment(experiment);
+  const summarize = (mode, experiment) => {
+    const trainSamples = mode === "train"
+      ? REMOTE_ENABLED
+        ? findRemoteTrainSamplesForExperiment(manifest, experiment)
+        : findTrainSamplesForExperiment(experiment)
+      : [];
+    const testSamples = mode === "test"
+      ? REMOTE_ENABLED
+        ? findRemoteTestSamplesForExperiment(manifest, experiment)
+        : findTestSamplesForExperiment(experiment)
+      : [];
 
     return {
       name: experiment.name,
@@ -752,11 +793,22 @@ async function getExperimentSummary() {
       trainCount: trainSamples.length,
       testCount: testSamples.length,
     };
-  });
+  };
+
+  const trainExperiments = TRAIN_EXPERIMENTS.map((experiment) => summarize("train", experiment));
+  const testExperiments = TEST_EXPERIMENTS.map((experiment) => summarize("test", experiment));
+
+  return {
+    experiments: Array.from(
+      new Map([...trainExperiments, ...testExperiments].map((exp) => [exp.name, exp])).values()
+    ),
+    trainExperiments,
+    testExperiments,
+  };
 }
 
 async function getDataByMode(mode, experimentName) {
-  const experiment = getExperimentMeta(experimentName);
+  const experiment = getExperimentMeta(experimentName, mode);
 
   if (!experiment) {
     return {
@@ -920,15 +972,15 @@ app.get("/api/health", (req, res) => {
     remoteAssetBaseUrl: REMOTE_ASSET_BASE_URL,
     remoteManifestUrl: REMOTE_MANIFEST_URL,
     experiments: EXPERIMENTS,
+    trainExperiments: TRAIN_EXPERIMENTS,
+    testExperiments: TEST_EXPERIMENTS,
     fileConfig: FILE_CONFIG,
   });
 });
 
 app.get("/api/experiments", async (req, res) => {
   try {
-    res.json({
-      experiments: await getExperimentSummary(),
-    });
+    res.json(await getExperimentSummary());
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: String(err.message || err) });

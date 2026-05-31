@@ -71,6 +71,14 @@ const state = {
   mode: "train",
   experiment: "",
   experiments: [],
+  experimentsByMode: {
+    train: [],
+    test: [],
+  },
+  experimentByMode: {
+    train: "",
+    test: "",
+  },
   dataCache: new Map(),
   selectedId: new Map(),
   csv: {
@@ -315,7 +323,14 @@ async function fetchExperiments() {
   }
 
   const data = await res.json();
-  return data.experiments || [];
+  const trainExperiments = data.trainExperiments || data.experiments || [];
+  const testExperiments = data.testExperiments || data.experiments || [];
+
+  return {
+    experiments: data.experiments || [...trainExperiments, ...testExperiments],
+    trainExperiments,
+    testExperiments,
+  };
 }
 
 async function fetchItems(mode, experiment) {
@@ -366,8 +381,20 @@ function flattenSamplesFromTree(tree) {
   return samples;
 }
 
+function getModeExperiments(mode = state.mode) {
+  if (mode === "test") {
+    return state.experimentsByMode.test || [];
+  }
+
+  if (mode === "train") {
+    return state.experimentsByMode.train || [];
+  }
+
+  return state.experiments || [];
+}
+
 function getExperimentMeta(name = state.experiment) {
-  return state.experiments.find((exp) => exp.name === name) || {
+  return getModeExperiments().find((exp) => exp.name === name) || {
     name,
     label: name || "未选择实验",
     trainCount: 0,
@@ -391,8 +418,9 @@ function formatCurrentName(item) {
 
 function renderExperimentSelect() {
   experimentSelectEl.innerHTML = "";
+  const experiments = getModeExperiments();
 
-  if (state.experiments.length === 0) {
+  if (experiments.length === 0) {
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "未找到实验";
@@ -404,7 +432,7 @@ function renderExperimentSelect() {
 
   experimentSelectEl.disabled = false;
 
-  for (const exp of state.experiments) {
+  for (const exp of experiments) {
     const option = document.createElement("option");
     option.value = exp.name;
     option.textContent = exp.label || exp.name;
@@ -412,10 +440,17 @@ function renderExperimentSelect() {
     experimentSelectEl.appendChild(option);
   }
 
-  if (!state.experiment || !state.experiments.some((exp) => exp.name === state.experiment)) {
-    state.experiment = state.experiments[0].name;
+  const rememberedExperiment = state.experimentByMode[state.mode];
+
+  if (rememberedExperiment && experiments.some((exp) => exp.name === rememberedExperiment)) {
+    state.experiment = rememberedExperiment;
   }
 
+  if (!state.experiment || !experiments.some((exp) => exp.name === state.experiment)) {
+    state.experiment = experiments[0].name;
+  }
+
+  state.experimentByMode[state.mode] = state.experiment;
   experimentSelectEl.value = state.experiment;
   updateExperimentHint();
 }
@@ -1099,6 +1134,7 @@ function switchMode(mode) {
     disposeTrainViewers();
   }
 
+  renderExperimentSelect();
   loadCurrentPage();
 }
 
@@ -1110,6 +1146,7 @@ for (const button of tabButtons) {
 
 experimentSelectEl.addEventListener("change", () => {
   state.experiment = experimentSelectEl.value;
+  state.experimentByMode[state.mode] = state.experiment;
 
   if (state.mode !== "csv") {
     loadCurrentPage();
@@ -1129,7 +1166,10 @@ async function init() {
     currentNameEl.textContent = "当前：正在读取实验...";
     itemListEl.innerHTML = `<div class="empty">正在读取实验...</div>`;
 
-    state.experiments = await fetchExperiments();
+    const experimentData = await fetchExperiments();
+    state.experiments = experimentData.experiments || [];
+    state.experimentsByMode.train = experimentData.trainExperiments || [];
+    state.experimentsByMode.test = experimentData.testExperiments || [];
     renderExperimentSelect();
     await loadCurrentPage();
   } catch (err) {

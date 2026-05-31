@@ -14,6 +14,54 @@
     "manifestUrl": "",
     "manifestFile": "config/remote_manifest.json"
   },
+  "trainExperiments": [
+    {
+      "name": "cnn-apml-1frame",
+      "label": "cnn-apml-1frame"
+    },
+    {
+      "name": "cnn-apml",
+      "label": "cnn-apml"
+    },
+    {
+      "name": "cnn-apml-3frame",
+      "label": "cnn-apml-3frame"
+    },
+    {
+      "name": "cnn-apml-5frame",
+      "label": "cnn-apml-5frame"
+    },
+    {
+      "name": "cnn-apml-nolight",
+      "label": "cnn-apml-nolight"
+    },
+    {
+      "name": "cnn-cd",
+      "label": "cnn-cd"
+    }
+  ],
+  "testExperiments": [
+    {
+      "name": "chaos_LS",
+      "label": "chaos_LS"
+    },
+    {
+      "name": "chaos_S",
+      "label": "chaos_S"
+    },
+    {
+      "name": "cnn-apml-200",
+      "label": "cnn-apml-200"
+    },
+    {
+      "name": "cnn-apml-fuck_P",
+      "label": "cnn-apml-fuck_P"
+    },
+    {
+      "name": "cnn-apml-fuck_S",
+      "label": "cnn-apml-fuck_S"
+    }
+  ],
   "experiments": [
     {
       "name": "cnn-apml-1frame",
