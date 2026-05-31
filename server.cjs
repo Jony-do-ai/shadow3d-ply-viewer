@@ -34,6 +34,13 @@ function loadJson(filePath, fallbackValue) {
 }
 
 const APP_CONFIG = loadJson(APP_CONFIG_PATH, {});
+let BUNDLED_REMOTE_MANIFEST = null;
+
+try {
+  BUNDLED_REMOTE_MANIFEST = require("./config/remote_manifest.json");
+} catch (err) {
+  BUNDLED_REMOTE_MANIFEST = null;
+}
 
 function resolveConfiguredPath(value, fallbackRelativePath) {
   const raw = value || fallbackRelativePath;
@@ -92,6 +99,10 @@ async function loadRemoteManifest() {
 
       if (REMOTE_MANIFEST_FILE && fs.existsSync(REMOTE_MANIFEST_FILE)) {
         return loadJson(REMOTE_MANIFEST_FILE, {});
+      }
+
+      if (BUNDLED_REMOTE_MANIFEST) {
+        return BUNDLED_REMOTE_MANIFEST;
       }
 
       if (!REMOTE_MANIFEST_URL) {
@@ -971,6 +982,8 @@ app.get("/api/health", (req, res) => {
     remoteEnabled: REMOTE_ENABLED,
     remoteAssetBaseUrl: REMOTE_ASSET_BASE_URL,
     remoteManifestUrl: REMOTE_MANIFEST_URL,
+    remoteManifestFile: REMOTE_MANIFEST_FILE,
+    hasBundledRemoteManifest: Boolean(BUNDLED_REMOTE_MANIFEST),
     experiments: EXPERIMENTS,
     trainExperiments: TRAIN_EXPERIMENTS,
     testExperiments: TEST_EXPERIMENTS,
