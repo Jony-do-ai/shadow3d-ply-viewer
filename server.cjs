@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { Readable } = require("stream");
 
 const app = express();
 
@@ -168,9 +169,12 @@ const REMOTE_ASSET_BASE_URL = normalizeRemoteBase(
   process.env.ASSET_BASE_URL || REMOTE_CONFIG.assetBaseUrl
 );
 const REMOTE_MANIFEST_URL =
-  process.env.REMOTE_MANIFEST_URL ||
-  REMOTE_CONFIG.manifestUrl ||
-  (REMOTE_ASSET_BASE_URL ? `${REMOTE_ASSET_BASE_URL}/manifest.json` : "");
+  process.env.REMOTE_MANIFEST_URL ??
+  (Object.prototype.hasOwnProperty.call(REMOTE_CONFIG, "manifestUrl")
+    ? REMOTE_CONFIG.manifestUrl
+    : REMOTE_ASSET_BASE_URL
+      ? `${REMOTE_ASSET_BASE_URL}/manifest.json`
+      : "");
 const REMOTE_MANIFEST_FILE =
   process.env.REMOTE_MANIFEST_FILE ||
   resolveConfiguredPath(REMOTE_CONFIG.manifestFile, "config/remote_manifest.json");
@@ -561,14 +565,7 @@ function findRemoteTrainSamplesForExperiment(manifest, experiment) {
     const relDir = joinRemoteUrl(experiment.name, FILE_CONFIG.trainPointCloudsDirName, sampleName);
     const sampleInfo = enrichSampleName(sampleName);
     const makeUrl = (file) =>
-      joinRemoteUrl(
-        REMOTE_ASSET_BASE_URL,
-        "train_runs",
-        experiment.name,
-        FILE_CONFIG.trainPointCloudsDirName,
-        sampleName,
-        file
-      );
+      `/api/ply?mode=train&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(file)}`;
 
     const plyFiles = [
       ...predFiles.map((file) => ({
@@ -641,7 +638,8 @@ function findRemoteTestSamplesForExperiment(manifest, experiment) {
     const sampleInfo = enrichSampleName(sampleName);
     const gtFile = sample.gtFile || sample.gt_file || TEST_GT_NAME;
     const predFile = sample.predFile || sample.pred_file || findTestPredFile(new Map([[TEST_PRED_NAMES[0], TEST_PRED_NAMES[0]]]));
-    const makeUrl = (file) => joinRemoteUrl(REMOTE_ASSET_BASE_URL, "infer", relDir, file);
+    const makeUrl = (file) =>
+      `/api/ply?mode=test&relDir=${encodeURIComponent(relDir)}&file=${encodeURIComponent(file)}`;
 
     results.push({
       mode: "test",
@@ -785,6 +783,12 @@ async function getDataByMode(mode, experimentName) {
 
 function getPlyRootByMode(mode) {
   return mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT;
+}
+
+function getRemotePlyUrl(mode, relDir, file) {
+  return mode === "train"
+    ? joinRemoteUrl(REMOTE_ASSET_BASE_URL, "train_runs", relDir, file)
+    : joinRemoteUrl(REMOTE_ASSET_BASE_URL, "test_runs", relDir, file);
 }
 
 function isValidPlyFile(mode, file) {
@@ -951,7 +955,7 @@ app.get("/api/csv-data", (req, res) => {
   }
 });
 
-app.get("/api/ply", (req, res) => {
+app.get("/api/ply", async (req, res) => {
   try {
     const mode = req.query.mode === "train" ? "train" : "test";
     const relDir = req.query.relDir;
@@ -963,6 +967,29 @@ app.get("/api/ply", (req, res) => {
 
     if (!isValidPlyFile(mode, file)) {
       return res.status(400).json({ error: "Invalid ply file" });
+    }
+
+    if (REMOTE_ENABLED) {
+      const remoteUrl = getRemotePlyUrl(mode, relDir, file);
+      const remoteRes = await fetch(remoteUrl);
+
+      if (!remoteRes.ok) {
+        return res.status(remoteRes.status).json({
+          error: "Remote PLY not found",
+          remoteUrl,
+        });
+      }
+
+      res.setHeader("Content-Type", remoteRes.headers.get("content-type") || "application/octet-stream");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+
+      const contentLength = remoteRes.headers.get("content-length");
+
+      if (contentLength) {
+        res.setHeader("Content-Length", contentLength);
+      }
+
+      return Readable.fromWeb(remoteRes.body).pipe(res);
     }
 
     const root = getPlyRootByMode(mode);
