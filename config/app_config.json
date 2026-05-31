@@ -8,7 +8,37 @@
     "trainRunsRoot": "D:/shadow3d-recon/data/train_runs",
     "categoryConfig": "config/shape_categories.json"
   },
+  "cloudflare": {
+    "enabled": true,
+    "assetBaseUrl": "https://pub-8c98ec7a24b24c3f9c39c396a6b2eca5.r2.dev",
+    "manifestUrl": "",
+    "manifestFile": "config/remote_manifest.json"
+  },
   "experiments": [
+    {
+      "name": "cnn-apml-1frame",
+      "label": "cnn-apml-1frame"
+    },
+    {
+      "name": "cnn-apml",
+      "label": "cnn-apml"
+    },
+    {
+      "name": "cnn-apml-3frame",
+      "label": "cnn-apml-3frame"
+    },
+    {
+      "name": "cnn-apml-5frame",
+      "label": "cnn-apml-5frame"
+    },
+    {
+      "name": "cnn-apml-nolight",
+      "label": "cnn-apml-nolight"
+    },
+    {
+      "name": "cnn-cd",
+      "label": "cnn-cd"
+    },
     {
       "name": "exp_no_light",
       "label": "去除光线输入"

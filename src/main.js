@@ -85,6 +85,18 @@ const state = {
 let trainViewers = [];
 let requestSerial = 0;
 
+function toAssetUrl(url) {
+  if (!url) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  return `${API_BASE}${url}`;
+}
+
 function dataKey(mode = state.mode, experiment = state.experiment) {
   return `${mode}::${experiment || ""}`;
 }
@@ -547,7 +559,7 @@ function renderShadowFrames(item) {
     card.className = "shadow-card";
 
     const img = document.createElement("img");
-    img.src = `${API_BASE}${frame.url}`;
+    img.src = toAssetUrl(frame.url);
     img.alt = frame.frameName;
     img.loading = "lazy";
 
@@ -563,8 +575,8 @@ function renderShadowFrames(item) {
 
 function renderTestItem(item) {
   currentNameEl.textContent = formatCurrentName(item);
-  gtViewer.loadPly(item.gtUrl ? `${API_BASE}${item.gtUrl}` : null);
-  predViewer.loadPly(item.predUrl ? `${API_BASE}${item.predUrl}` : null);
+  gtViewer.loadPly(toAssetUrl(item.gtUrl));
+  predViewer.loadPly(toAssetUrl(item.predUrl));
   renderShadowFrames(item);
 
   requestAnimationFrame(() => {
@@ -592,7 +604,7 @@ function createTrainPlyCard(file, index) {
 
   const color = file.kind === "gt" ? 0x111111 : 0x0055ff;
   const viewer = createViewer(viewerEl, color);
-  viewer.loadPly(`${API_BASE}${file.url}`);
+  viewer.loadPly(toAssetUrl(file.url));
   trainViewers.push(viewer);
 
   return viewer;

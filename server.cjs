@@ -48,6 +48,88 @@ function resolveConfiguredPath(value, fallbackRelativePath) {
   return path.resolve(__dirname, raw);
 }
 
+function normalizeRemoteBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function joinRemoteUrl(...parts) {
+  return parts
+    .filter((part) => part !== null && part !== undefined && String(part).trim() !== "")
+    .map((part, index) => {
+      const value = String(part).replace(/\\/g, "/");
+      return index === 0 ? value.replace(/\/+$/, "") : value.replace(/^\/+|\/+$/g, "");
+    })
+    .join("/");
+}
+
+function normalizeManifestSamples(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (Array.isArray(value.samples)) {
+    return value.samples;
+  }
+
+  return [];
+}
+
+async function loadRemoteManifest() {
+  if (!REMOTE_ENABLED) {
+    return null;
+  }
+
+  if (!remoteManifestPromise) {
+    remoteManifestPromise = (async () => {
+      if (REMOTE_CONFIG.manifest && typeof REMOTE_CONFIG.manifest === "object") {
+        return REMOTE_CONFIG.manifest;
+      }
+
+      if (REMOTE_MANIFEST_FILE && fs.existsSync(REMOTE_MANIFEST_FILE)) {
+        return loadJson(REMOTE_MANIFEST_FILE, {});
+      }
+
+      if (!REMOTE_MANIFEST_URL) {
+        console.warn("[WARN] Cloudflare mode is enabled but manifestUrl is empty.");
+        return {};
+      }
+
+      const res = await fetch(REMOTE_MANIFEST_URL);
+
+      if (!res.ok) {
+        console.warn(`[WARN] Remote manifest failed: ${res.status} ${REMOTE_MANIFEST_URL}`);
+        console.warn(`[WARN] Upload manifest.json to R2 or create local fallback: ${REMOTE_MANIFEST_FILE}`);
+        return {};
+      }
+
+      return await res.json();
+    })().catch((err) => {
+      remoteManifestPromise = null;
+      throw err;
+    });
+  }
+
+  return await remoteManifestPromise;
+}
+
+function getManifestExperiment(manifest, experimentName) {
+  const experiments = manifest?.experiments;
+
+  if (Array.isArray(experiments)) {
+    return experiments.find((exp) => exp?.name === experimentName) || null;
+  }
+
+  if (experiments && typeof experiments === "object") {
+    return experiments[experimentName] || null;
+  }
+
+  return manifest?.[experimentName] || null;
+}
+
 const FILE_CONFIG = {
   trainPointCloudsDirName: "point_clouds",
   testPredNames: ["pred.ply", "pre.ply"],
@@ -57,6 +139,13 @@ const FILE_CONFIG = {
   shadowImageName: "rgb_with_shadow.png",
   shadowFrameCount: 10,
   ...(APP_CONFIG.files || {}),
+};
+
+const REMOTE_CONFIG = {
+  enabled: false,
+  assetBaseUrl: "",
+  manifestUrl: "",
+  ...(APP_CONFIG.cloudflare || {}),
 };
 
 const PORT = Number(process.env.PORT || APP_CONFIG.server?.port || 3001);
@@ -74,12 +163,29 @@ const TRAIN_PRED_RE = new RegExp(FILE_CONFIG.trainPredPattern || "^epoch_\\d+_pr
 const SHADOW_IMAGE_NAME = String(FILE_CONFIG.shadowImageName || "rgb_with_shadow.png");
 const SHADOW_FRAME_COUNT = Number(FILE_CONFIG.shadowFrameCount || 10);
 const CSV_DATA_ROOT = path.join(__dirname, "public", "data", "train");
+const REMOTE_ENABLED = Boolean(REMOTE_CONFIG.enabled);
+const REMOTE_ASSET_BASE_URL = normalizeRemoteBase(
+  process.env.ASSET_BASE_URL || REMOTE_CONFIG.assetBaseUrl
+);
+const REMOTE_MANIFEST_URL =
+  process.env.REMOTE_MANIFEST_URL ||
+  REMOTE_CONFIG.manifestUrl ||
+  (REMOTE_ASSET_BASE_URL ? `${REMOTE_ASSET_BASE_URL}/manifest.json` : "");
+const REMOTE_MANIFEST_FILE =
+  process.env.REMOTE_MANIFEST_FILE ||
+  resolveConfiguredPath(REMOTE_CONFIG.manifestFile, "config/remote_manifest.json");
+
+let remoteManifestPromise = null;
 
 console.log("[INFO] APP_CONFIG =", APP_CONFIG_PATH);
 console.log("[INFO] PLY_ROOT =", PLY_ROOT);
 console.log("[INFO] DATASET_ROOT =", DATASET_ROOT);
 console.log("[INFO] TRAIN_RUNS_ROOT =", TRAIN_RUNS_ROOT);
 console.log("[INFO] CATEGORY_CONFIG =", CATEGORY_CONFIG);
+console.log("[INFO] REMOTE_ENABLED =", REMOTE_ENABLED);
+console.log("[INFO] REMOTE_ASSET_BASE_URL =", REMOTE_ASSET_BASE_URL);
+console.log("[INFO] REMOTE_MANIFEST_URL =", REMOTE_MANIFEST_URL);
+console.log("[INFO] REMOTE_MANIFEST_FILE =", REMOTE_MANIFEST_FILE);
 
 const CATEGORY_MAP = loadJson(CATEGORY_CONFIG, {});
 
@@ -375,6 +481,188 @@ function findTrainSamplesForExperiment(experiment) {
   return results.sort(compareSamples);
 }
 
+function getRemoteTrainSampleEntries(manifest, experiment) {
+  const expManifest = getManifestExperiment(manifest, experiment.name);
+  const candidates = [
+    expManifest?.trainSamples,
+    expManifest?.train,
+    expManifest?.samples,
+    manifest?.trainSamples?.[experiment.name],
+    manifest?.train_runs?.[experiment.name]?.point_clouds,
+  ];
+
+  for (const candidate of candidates) {
+    const samples = normalizeManifestSamples(candidate);
+
+    if (samples.length > 0) {
+      return samples;
+    }
+
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      return Object.entries(candidate).map(([sampleName, files]) => ({
+        sampleName,
+        modelId: sampleName,
+        files,
+      }));
+    }
+  }
+
+  return [];
+}
+
+function getRemoteFileNames(sample) {
+  const rawFiles = sample.files || sample.plyFiles || sample.pointClouds || sample.point_clouds || [];
+
+  if (Array.isArray(rawFiles)) {
+    return rawFiles
+      .map((file) => (typeof file === "string" ? file : file?.file || file?.name))
+      .filter(Boolean);
+  }
+
+  if (rawFiles && typeof rawFiles === "object") {
+    return Object.values(rawFiles)
+      .flat()
+      .map((file) => (typeof file === "string" ? file : file?.file || file?.name))
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function findRemoteTrainSamplesForExperiment(manifest, experiment) {
+  const results = [];
+
+  for (const sample of getRemoteTrainSampleEntries(manifest, experiment)) {
+    const sampleName = String(sample.sampleName || sample.name || sample.modelId || "").trim();
+
+    if (!sampleName) {
+      continue;
+    }
+
+    const fileNames = getRemoteFileNames(sample);
+    const predFiles = [
+      ...fileNames.filter((name) => TRAIN_PRED_RE.test(name)),
+      ...(sample.predFiles || sample.pred_files || []),
+    ]
+      .filter(Boolean)
+      .map(String)
+      .sort((a, b) => getEpochNumber(a) - getEpochNumber(b));
+
+    const gtFile =
+      sample.gtFile ||
+      sample.gt_file ||
+      fileNames.find((name) => name.toLowerCase() === TRAIN_GT_NAME.toLowerCase()) ||
+      null;
+
+    if (predFiles.length === 0 && !gtFile) {
+      continue;
+    }
+
+    const relDir = joinRemoteUrl(experiment.name, FILE_CONFIG.trainPointCloudsDirName, sampleName);
+    const sampleInfo = enrichSampleName(sampleName);
+    const makeUrl = (file) =>
+      joinRemoteUrl(
+        REMOTE_ASSET_BASE_URL,
+        "train_runs",
+        experiment.name,
+        FILE_CONFIG.trainPointCloudsDirName,
+        sampleName,
+        file
+      );
+
+    const plyFiles = [
+      ...predFiles.map((file) => ({
+        kind: "pred",
+        file,
+        label: file,
+        epoch: getEpochNumber(file),
+        url: makeUrl(file),
+      })),
+      ...(gtFile
+        ? [
+            {
+              kind: "gt",
+              file: gtFile,
+              label: gtFile,
+              epoch: null,
+              url: makeUrl(gtFile),
+            },
+          ]
+        : []),
+    ];
+
+    results.push({
+      mode: "train",
+      nodeType: "sample",
+      id: `train:${relDir}`,
+      label: sampleInfo.modelId,
+      relDir,
+      experimentName: experiment.name,
+      experimentLabel: experiment.label,
+      plyFiles,
+      ...sampleInfo,
+    });
+  }
+
+  return results.sort(compareSamples);
+}
+
+function getRemoteTestSampleEntries(manifest, experiment) {
+  const expManifest = getManifestExperiment(manifest, experiment.name);
+  const candidates = [
+    expManifest?.testSamples,
+    expManifest?.test,
+    manifest?.testSamples?.[experiment.name],
+    manifest?.infer?.[experiment.name],
+  ];
+
+  for (const candidate of candidates) {
+    const samples = normalizeManifestSamples(candidate);
+
+    if (samples.length > 0) {
+      return samples;
+    }
+  }
+
+  return [];
+}
+
+function findRemoteTestSamplesForExperiment(manifest, experiment) {
+  const results = [];
+
+  for (const sample of getRemoteTestSampleEntries(manifest, experiment)) {
+    const sampleName = String(sample.sampleName || sample.name || sample.modelId || "").trim();
+
+    if (!sampleName) {
+      continue;
+    }
+
+    const relDir = sample.relDir || joinRemoteUrl(experiment.name, sampleName);
+    const sampleInfo = enrichSampleName(sampleName);
+    const gtFile = sample.gtFile || sample.gt_file || TEST_GT_NAME;
+    const predFile = sample.predFile || sample.pred_file || findTestPredFile(new Map([[TEST_PRED_NAMES[0], TEST_PRED_NAMES[0]]]));
+    const makeUrl = (file) => joinRemoteUrl(REMOTE_ASSET_BASE_URL, "infer", relDir, file);
+
+    results.push({
+      mode: "test",
+      nodeType: "sample",
+      id: `test:${relDir}`,
+      label: sampleInfo.modelId,
+      relDir,
+      experimentName: experiment.name,
+      experimentLabel: experiment.label,
+      hasGt: Boolean(gtFile),
+      hasPred: Boolean(predFile),
+      gtUrl: gtFile ? makeUrl(gtFile) : null,
+      predUrl: predFile ? makeUrl(predFile) : null,
+      shadowFrames: sample.shadowFrames || [],
+      ...sampleInfo,
+    });
+  }
+
+  return results.sort(compareSamples);
+}
+
 function compareSamples(a, b) {
   return (
     String(a.categoryNameZh).localeCompare(String(b.categoryNameZh), "zh-CN") ||
@@ -437,10 +725,28 @@ function getSamplesByMode(mode, experiment) {
     : findTestSamplesForExperiment(experiment);
 }
 
-function getExperimentSummary() {
+async function getSamplesByModeAsync(mode, experiment) {
+  if (!REMOTE_ENABLED) {
+    return getSamplesByMode(mode, experiment);
+  }
+
+  const manifest = await loadRemoteManifest();
+
+  return mode === "train"
+    ? findRemoteTrainSamplesForExperiment(manifest, experiment)
+    : findRemoteTestSamplesForExperiment(manifest, experiment);
+}
+
+async function getExperimentSummary() {
+  const manifest = REMOTE_ENABLED ? await loadRemoteManifest() : null;
+
   return EXPERIMENTS.map((experiment) => {
-    const trainSamples = findTrainSamplesForExperiment(experiment);
-    const testSamples = findTestSamplesForExperiment(experiment);
+    const trainSamples = REMOTE_ENABLED
+      ? findRemoteTrainSamplesForExperiment(manifest, experiment)
+      : findTrainSamplesForExperiment(experiment);
+    const testSamples = REMOTE_ENABLED
+      ? findRemoteTestSamplesForExperiment(manifest, experiment)
+      : findTestSamplesForExperiment(experiment);
 
     return {
       name: experiment.name,
@@ -451,7 +757,7 @@ function getExperimentSummary() {
   });
 }
 
-function getDataByMode(mode, experimentName) {
+async function getDataByMode(mode, experimentName) {
   const experiment = getExperimentMeta(experimentName);
 
   if (!experiment) {
@@ -459,19 +765,19 @@ function getDataByMode(mode, experimentName) {
       mode,
       experimentName,
       experimentLabel: experimentName,
-      root: mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT,
+      root: REMOTE_ENABLED ? REMOTE_ASSET_BASE_URL : mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT,
       samples: [],
       tree: [],
     };
   }
 
-  const samples = getSamplesByMode(mode, experiment);
+  const samples = await getSamplesByModeAsync(mode, experiment);
 
   return {
     mode,
     experimentName: experiment.name,
     experimentLabel: experiment.label || experiment.name,
-    root: mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT,
+    root: REMOTE_ENABLED ? REMOTE_ASSET_BASE_URL : mode === "train" ? TRAIN_RUNS_ROOT : PLY_ROOT,
     samples,
     tree: buildCategoryTree(samples),
   };
@@ -606,15 +912,18 @@ app.get("/api/health", (req, res) => {
     datasetRoot: DATASET_ROOT,
     trainRunsRoot: TRAIN_RUNS_ROOT,
     categoryConfig: CATEGORY_CONFIG,
+    remoteEnabled: REMOTE_ENABLED,
+    remoteAssetBaseUrl: REMOTE_ASSET_BASE_URL,
+    remoteManifestUrl: REMOTE_MANIFEST_URL,
     experiments: EXPERIMENTS,
     fileConfig: FILE_CONFIG,
   });
 });
 
-app.get("/api/experiments", (req, res) => {
+app.get("/api/experiments", async (req, res) => {
   try {
     res.json({
-      experiments: getExperimentSummary(),
+      experiments: await getExperimentSummary(),
     });
   } catch (err) {
     console.error(err);
@@ -622,11 +931,11 @@ app.get("/api/experiments", (req, res) => {
   }
 });
 
-app.get("/api/items", (req, res) => {
+app.get("/api/items", async (req, res) => {
   try {
     const mode = req.query.mode === "test" ? "test" : "train";
     const experiment = typeof req.query.experiment === "string" ? req.query.experiment : "";
-    res.json(getDataByMode(mode, experiment));
+    res.json(await getDataByMode(mode, experiment));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: String(err.message || err) });
